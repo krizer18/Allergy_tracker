@@ -3,7 +3,7 @@
   "name": "Allergy Extension",
   "version": "1.0.0",
   "background": {
-    "service_worker": "src/service-worker.js"
+    "service_worker": "service-worker.js"
   },
   "icons" : {
     "64" : "icon.png"
