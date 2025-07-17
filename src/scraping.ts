@@ -19,7 +19,7 @@ export function toAbsolute(href: string | null): string {
   return new URL(href, window.location.origin).href;
 }
 
-// 3️⃣ Parse “Ingredients” out of a product‐page HTML
+// 3️⃣ Parse "Ingredients" out of a product‐page HTML
 export function parseIngredients(html: string): string {
   const doc = new DOMParser().parseFromString(html, "text/html");
 
@@ -37,7 +37,7 @@ export function parseIngredients(html: string): string {
 
   // b) productDetails table
   for (const row of Array.from(
-    doc.querySelectorAll<HTMLTableRowElement>("#productDetails_detailBullets_sections1 tr")
+    doc.querySelectorAll<HTMLTableRowElement>("#productDetails_detailBullets_sections1 tr, #productDetails tr, .prodDetTable tr, .a-keyvalue tr")
   )) {
     const th = row.querySelector<HTMLTableCellElement>("th");
     if (th && /ingredients/i.test(th.textContent || "")) {
@@ -50,11 +50,83 @@ export function parseIngredients(html: string): string {
 
   // c) feature‐bullets fallback
   const featureText = doc
-    .querySelector<HTMLElement>("#feature-bullets")
+    .querySelector<HTMLElement>("#feature-bullets, .a-unordered-list")
     ?.textContent || "";
-  const m = /Ingredients[:\s]*([^\\.]+)/i.exec(featureText);
+  const m = /Ingredients[:\s]*([^.]+)/i.exec(featureText);
   if (m) {
     return m[1].trim();
+  }
+
+  // d) Important Information section
+  const importantInfoSection = doc.querySelector("#importantInformation, #important-information, .important-information, .product-facts");
+  if (importantInfoSection) {
+    // Try to find a heading or bold text with "Ingredients"
+    const headings = importantInfoSection.querySelectorAll("h5, h4, h3, b, strong, .a-text-bold");
+    for (const heading of Array.from(headings)) {
+      if (/ingredients/i.test(heading.textContent || "")) {
+        // Look for the next sibling or parent element's text
+        let info = "";
+        // Try next sibling
+        const next = heading.nextElementSibling;
+        if (next && next.textContent) {
+          info = next.textContent.trim();
+        }
+        // If not, try parent
+        if (!info && heading.parentElement && heading.parentElement.textContent) {
+          info = heading.parentElement.textContent.replace(/Ingredients[:\s]*/i, "").trim();
+        }
+        if (info) {
+          return info;
+        }
+      }
+    }
+    // Fallback: search for "Ingredients:" in the section text
+    const text = importantInfoSection.textContent || "";
+    const match = /Ingredients[:\s]*([^\n.]+)/i.exec(text);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+
+  // e) Look for any section with "ingredients" in the heading
+  const allHeadings = doc.querySelectorAll("h1, h2, h3, h4, h5, h6, .a-section .a-text-bold");
+  for (const heading of Array.from(allHeadings)) {
+    if (/ingredients/i.test(heading.textContent || "")) {
+      // Check the parent section or div
+      const section = heading.closest(".a-section, div");
+      if (section) {
+        const text = section.textContent || "";
+        // Remove the heading text and extract ingredients
+        const headingText = heading.textContent || "";
+        const ingredientsText = text.replace(headingText, "").trim();
+        if (ingredientsText) {
+          return ingredientsText;
+        }
+      }
+      
+      // Try next sibling or parent
+      const nextEl = heading.nextElementSibling;
+      if (nextEl && nextEl.textContent) {
+        return nextEl.textContent.trim();
+      }
+    }
+  }
+
+  // f) Fallback: search anywhere in the document for "Ingredients:"
+  const allText = doc.body.textContent || "";
+  const globalMatch = /Ingredients[:\s]*([^\n.]+)/i.exec(allText);
+  if (globalMatch) {
+    return globalMatch[1].trim();
+  }
+  
+  // g) Look for nutrition facts section which might contain ingredients
+  const nutritionSection = doc.querySelector(".nutritionFacts, #nutrition-facts, .nutrition-facts");
+  if (nutritionSection) {
+    const text = nutritionSection.textContent || "";
+    const match = /Ingredients[:\s]*([^\n.]+)/i.exec(text);
+    if (match) {
+      return match[1].trim();
+    }
   }
 
   throw new Error(ParseErrors.NoIngredientsFound);
@@ -77,7 +149,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .then(results => sendResponse({ results }))
       .catch(err => sendResponse({ error: err.message }));
 
-    // indicate that we’ll call sendResponse asynchronously
+    // indicate that we'll call sendResponse asynchronously
     return true;
   }
 });
