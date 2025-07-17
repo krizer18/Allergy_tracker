@@ -33,6 +33,8 @@ export default function Registration() {
     const [scrapeResults, setScrapeResults] = useState<ScrapeResult[]>([]);
     const [allergies, setAllergies] = useState<string[]>([]);
     const [newAllergy, setNewAllergy] = useState<string>('');
+    const [isLoading, setIsLoading] = useState<boolean>(false);
+    const [currentUser, setCurrentUser] = useState<{email: string, uid: string} | null>(null);
     
 
     const auth = getAuth(app);
@@ -61,11 +63,57 @@ export default function Registration() {
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, (user) => {
             if (user) {
+                setCurrentUser({
+                    email: user.email || 'User',
+                    uid: user.uid
+                });
+                // Store user info in localStorage for persistence
+                localStorage.setItem('currentUser', JSON.stringify({
+                    email: user.email || 'User',
+                    uid: user.uid
+                }));
                 loadUserAllergies(user.uid);
+                loadLatestScrapeResults(user.uid);
+            } else {
+                setCurrentUser(null);
+                localStorage.removeItem('currentUser');
             }
         });
         return () => unsubscribe();
     }, [auth]);
+    
+    // Check localStorage for user on component mount
+    useEffect(() => {
+        const storedUser = localStorage.getItem('currentUser');
+        if (storedUser) {
+            try {
+                const parsedUser = JSON.parse(storedUser);
+                if (parsedUser && parsedUser.uid) {
+                    setCurrentUser(parsedUser);
+                    loadUserAllergies(parsedUser.uid);
+                    loadLatestScrapeResults(parsedUser.uid);
+                }
+            } catch (err) {
+                console.error('Error parsing stored user:', err);
+                localStorage.removeItem('currentUser');
+            }
+        }
+    }, []);
+    
+    // Load allergies from localStorage
+    useEffect(() => {
+        const storedAllergies = localStorage.getItem('userAllergies');
+        if (storedAllergies) {
+            try {
+                const parsedAllergies = JSON.parse(storedAllergies);
+                if (Array.isArray(parsedAllergies)) {
+                    setAllergies(parsedAllergies);
+                }
+            } catch (err) {
+                console.error('Error parsing stored allergies:', err);
+            }
+        }
+    }, []);
 
     // Load user allergies
     const loadUserAllergies = async (userId: string) => {
@@ -97,22 +145,64 @@ export default function Registration() {
         }
     };
 
-    // Save allergies to Firestore
+    // Save allergies to Firestore and localStorage
     const saveUserAllergies = async (updatedAllergies: string[]) => {
-        if (!auth.currentUser) {
-            setLoginError('You must be logged in to save allergies');
+        // Always save to localStorage for persistence
+        localStorage.setItem('userAllergies', JSON.stringify(updatedAllergies));
+        
+        if (!auth.currentUser && !currentUser) {
+            setLoginError('You must be logged in to save allergies to your account');
             return;
         }
 
         try {
-            const userRef = doc(db, 'users', auth.currentUser.uid);
+            const userId = auth.currentUser?.uid || currentUser?.uid;
+            if (!userId) return;
+            
+            const userRef = doc(db, 'users', userId);
             await setDoc(userRef, {
                 allergies: updatedAllergies,
                 lastUpdated: new Date().toISOString()
             }, { merge: true });
         } catch (err) {
             console.error('Error saving allergies:', err);
-            setLoginError('Failed to save your allergies');
+            setLoginError('Failed to save your allergies to your account');
+        }
+    };
+    
+    // Save scrape results to Firestore
+    const saveScrapeResults = async (results: ScrapeResult[]) => {
+        if (!auth.currentUser) {
+            return; // Don't save if not logged in
+        }
+
+        try {
+            const userRef = doc(db, 'users', auth.currentUser.uid);
+            await setDoc(userRef, {
+                latestScrape: {
+                    results,
+                    timestamp: new Date().toISOString()
+                }
+            }, { merge: true });
+            console.log('Scrape results saved to Firebase');
+        } catch (err) {
+            console.error('Error saving scrape results:', err);
+        }
+    };
+    
+    // Load latest scrape results from Firestore
+    const loadLatestScrapeResults = async (userId: string) => {
+        try {
+            const userRef = doc(db, 'users', userId);
+            const userDoc = await getDoc(userRef);
+
+            if (userDoc.exists() && userDoc.data().latestScrape) {
+                const latestScrape = userDoc.data().latestScrape;
+                setScrapeResults(latestScrape.results);
+                console.log('Loaded previous scrape results from', latestScrape.timestamp);
+            }
+        } catch (err) {
+            console.error('Error loading scrape results:', err);
         }
     };
 
@@ -212,16 +302,19 @@ export default function Registration() {
     const handleScrapeClick = () => {
         setLoginError('');
         setScrapeResults([]);
+        setIsLoading(true); // Start loading state
 
         chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
             const tab = tabs[0] || undefined;
             if (!tab?.id) {
                 setLoginError('No active tab found');
+                setIsLoading(false);
                 return;
             }
 
             if (!tab.url?.includes('amazon.com')) {
                 setLoginError('Please navigate to your Amazon Fresh cart first');
+                setIsLoading(false);
                 return;
             }
 
@@ -229,6 +322,7 @@ export default function Registration() {
                 if (chrome.runtime.lastError) {
                     console.error('Error injecting content script:', chrome.runtime.lastError);
                     setLoginError(`Extension error: ${chrome.runtime.lastError.message || 'Could not inject content script'}`);
+                    setIsLoading(false);
                     return;
                 }
 
@@ -241,6 +335,8 @@ export default function Registration() {
                             allergies: allergies
                         },
                         response => {
+                            setIsLoading(false); // End loading state
+                            
                             if (chrome.runtime.lastError) {
                                 console.error('Error sending message:', chrome.runtime.lastError);
                                 setLoginError(`Extension error: ${chrome.runtime.lastError.message || 'Could not communicate with page'}`);
@@ -250,6 +346,10 @@ export default function Registration() {
                             console.log('Received response:', response);
                             if (response?.success && response.results) {
                                 setScrapeResults(response.results);
+                                // Save results to Firebase if user is logged in
+                                if (currentUser) {
+                                    saveScrapeResults(response.results);
+                                }
                             } else {
                                 setLoginError(response?.error || "Unknown error");
                             }
@@ -262,35 +362,65 @@ export default function Registration() {
 
     return (
         <>
+            <div className="app-title">
+                <h1>Allergy Tracker</h1>
+                {currentUser && (
+                    <div className="user-status">
+                        <span className="status-dot"></span>
+                        Logged in as {currentUser.email}
+                    </div>
+                )}
+                <small className="privacy-link">
+                    <a href="privacy-policy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+                </small>
+            </div>
             <div className="formContent">
                 {loginError && <p className="error">{loginError}</p>}
 
-                <form className="log" onSubmit={handleLogin}>
-                    <input
-                        type="email"
-                        value={email}
-                        onChange={e => setEmail(e.target.value)}
-                        placeholder="Enter your email"
-                        required
-                    />
-                    <input
-                        type="password"
-                        value={password}
-                        onChange={e => setPassword(e.target.value)}
-                        placeholder="Enter your password"
-                        required
-                    />
-                    <button type="submit">Log in</button>
-                </form>
+                {!currentUser ? (
+                    <>
+                        <form className="log" onSubmit={handleLogin}>
+                            <input
+                                type="email"
+                                value={email}
+                                onChange={e => setEmail(e.target.value)}
+                                placeholder="Enter your email"
+                                required
+                            />
+                            <input
+                                type="password"
+                                value={password}
+                                onChange={e => setPassword(e.target.value)}
+                                placeholder="Enter your password"
+                                required
+                            />
+                            <div style={{ display: 'flex', gap: '10px' }}>
+                                <button type="submit">Log in</button>
+                                <button type="button" onClick={handleSignUp}>Sign up</button>
+                            </div>
+                        </form>
 
-                <button type="button" onClick={handleSignUp}>
-                    Sign Up
-                </button>
-
-                <button type="button" onClick={handleGoogleSignIn}>
-                    <FaGoogle style={{ verticalAlign: 'middle', marginRight: '0.5em' }} />
-                    Continue with Google
-                </button>
+                        <button type="button" onClick={handleGoogleSignIn}>
+                            <FaGoogle style={{ verticalAlign: 'middle', marginRight: '0.5em' }} />
+                            Continue with Google
+                        </button>
+                    </>
+                ) : (
+                    <div className="logged-in-actions">
+                        <p>Your allergies and scan results will be saved automatically.</p>
+                        <button type="button" onClick={() => {
+                            // Clear allergies and results when logging out
+                            setAllergies([]);
+                            setScrapeResults([]);
+                            setEmail(''); // Clear email field
+                            setPassword(''); // Clear password field
+                            localStorage.removeItem('userAllergies');
+                            auth.signOut();
+                        }} className="logout-button">
+                            Log out
+                        </button>
+                    </div>
+                )}
             </div>
 
             <div className="allergies-section">
@@ -318,7 +448,7 @@ export default function Registration() {
                     ) : (
                         allergies.map((allergy, index) => (
                             <li key={index} className="allergy-item">
-                                <span>{allergy}</span>
+                                <span style={{ color: '#333', fontWeight: 'bold' }}>{allergy}</span>
                                 <button onClick={() => handleRemoveAllergy(index)}>Remove</button>
                             </li>
                         ))
@@ -327,41 +457,69 @@ export default function Registration() {
             </div>
 
             <div className="scrape-section">
-                <button type="button" onClick={handleScrapeClick}>
-                    Scrape My Fresh Cart
+                <button 
+                    type="button" 
+                    onClick={handleScrapeClick} 
+                    disabled={isLoading}
+                >
+                    {isLoading ? 'Scraping...' : 'Scrape My Fresh Cart'}
                 </button>
+                {isLoading && (
+                    <div className="loading-indicator">
+                        <div className="spinner"></div>
+                        <p>Scanning products for allergens...</p>
+                    </div>
+                )}
 
                 {scrapeResults.length > 0 && (
                     <div className="scrape-output">
                         <h3>Ingredients found:</h3>
                         <ul>
-                            {scrapeResults.map(({ url, title, ingredients, error, allergyFound, allergyMatches }) => (
-                                <li key={url} className={allergyFound ? 'allergy-warning-item' : error ? 'error-item' : ''}>
-                                    <h4>{title || 'Unknown Product'}</h4>
-                                    {allergyFound && allergyMatches && allergyMatches.length > 0 && (
-                                        <div className="allergy-warning">
-                                            <p className="warning-text">⚠️ Warning: Contains allergens: {allergyMatches.join(', ')}</p>
-                                        </div>
-                                    )}
-                                    <a href={url} target="_blank" rel="noopener noreferrer">
-                                        View product
-                                    </a>
-                                    {error ? (
-                                        <p className="error-text">Error: {error}</p>
-                                    ) : (
-                                        <div>
-                                            <p><strong>Ingredients:</strong></p>
-                                            <p className="ingredients-text">
-                                                {allergyFound && allergyMatches && allergyMatches.length > 0
-                                                    ? <span dangerouslySetInnerHTML={{
-                                                        __html: highlightAllergies(ingredients, allergyMatches)
-                                                    }} />
-                                                    : ingredients}
-                                            </p>
-                                        </div>
-                                    )}
-                                </li>
-                            ))}
+                            {scrapeResults
+                                // Filter out duplicate entries and entries with "Opens in a new tab" as title
+                                .filter((result, index, self) => 
+                                    // Keep only the first occurrence of each URL
+                                    index === self.findIndex(r => r.url === result.url) &&
+                                    // Filter out entries with just "Opens in a new tab" as title
+                                    !(result.title === "Opens in a new tab")
+                                )
+                                .map(({ url, title, ingredients, error, allergyFound, allergyMatches }) => {
+                                    // Clean up the title by removing "Opens in a new tab"
+                                    const cleanTitle = title?.replace(/\s*Opens in a new tab\s*/, '') || 'Unknown Product';
+                                    
+                                    return (
+                                        <li key={url} className={allergyFound ? 'allergy-warning-item' : error ? 'error-item' : ''}>
+                                            <h4 style={{ backgroundColor: '#f8f9fa', padding: '5px', borderRadius: '3px' }}>
+                                                {allergyFound && allergyMatches && allergyMatches.length > 0 ? (
+                                                    <span style={{ color: '#d32f2f', fontWeight: 'bold' }}>⚠️ {cleanTitle}</span>
+                                                ) : (
+                                                    <span style={{ color: '#0066cc', fontWeight: 'bold' }}>{cleanTitle}</span>
+                                                )}
+                                            </h4>
+                                            {allergyFound && allergyMatches && allergyMatches.length > 0 && (
+                                                <div className="allergy-warning">
+                                                    <p className="warning-text">Warning: Contains allergens: {allergyMatches.join(', ')}</p>
+                                                </div>
+                                            )}
+                                            <a href={url} target="_blank" rel="noopener noreferrer">
+                                                View product
+                                            </a>
+                                            {error ? (
+                                                <p className="error-text">Error: {error}</p>
+                                            ) : (
+                                                <div>
+                                                    <p><strong>Ingredients:</strong></p>
+                                                    <p className="ingredients-text">
+                                                        <span dangerouslySetInnerHTML={{
+                                                            __html: highlightAllergies(ingredients, allergyMatches || [])
+                                                        }} />
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </li>
+                                    );
+                                })
+                            }
                         </ul>
                     </div>
                 )}
