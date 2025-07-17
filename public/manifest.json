@@ -12,15 +12,26 @@
     "default_popup": "index.html"
   },
   "permissions": [
-    "scripting"
+    "scripting",
+    "https://www.amazon.com/*",
+    "identity",
+    "tabs"
     ],
   "host_permissions": [
     "<all_urls>"
     ],
-  "permissions": [
-    "identity"
-  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self';"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.amazon.com/cart/*",
+        "https://www.amazon.com/alm/cart*",
+        "https://www.amazon.com/alm/storefront/*"
+      ],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
 }
