@@ -1,6 +1,3 @@
-// content-script.ts
-// This file will be bundled and injected into Amazon pages
-
 // Error constants
 const HrefConversionErrors = {
   MissingHref: "Missing href attribute on element",
@@ -10,7 +7,7 @@ const ParseErrors = {
   NoIngredientsFound: "No ingredients section found in the parsed HTML",
 };
 
-// Convert href → absolute, throwing if absent
+// Convert href → absolute
 function toAbsolute(href: string | null): string {
   if (!href) {
     throw new Error(HrefConversionErrors.MissingHref);
@@ -18,11 +15,11 @@ function toAbsolute(href: string | null): string {
   return new URL(href, window.location.origin).href;
 }
 
-// Parse "Ingredients" out of a product‐page HTML
+// Parse "Ingredients" subheading out of a product‐page HTML
 function parseIngredients(html: string): string {
   const doc = new DOMParser().parseFromString(html, "text/html");
 
-  // a) detailBullets list
+  // list
   for (const li of Array.from(
     doc.querySelectorAll<HTMLLIElement>("#detailBullets_feature_div li")
   )) {
@@ -34,7 +31,7 @@ function parseIngredients(html: string): string {
     }
   }
 
-  // b) productDetails table
+  // table
   for (const row of Array.from(
     doc.querySelectorAll<HTMLTableRowElement>("#productDetails_detailBullets_sections1 tr, #productDetails tr, .prodDetTable tr, .a-keyvalue tr")
   )) {
@@ -47,7 +44,7 @@ function parseIngredients(html: string): string {
     }
   }
 
-  // c) feature‐bullets fallback
+  // fallback
   const featureText = doc
     .querySelector<HTMLElement>("#feature-bullets, .a-unordered-list")
     ?.textContent || "";
@@ -56,23 +53,18 @@ function parseIngredients(html: string): string {
     return m[1].trim();
   }
 
-  // d) Important Information section
-  // Amazon often puts "Important information" in a div with id="importantInformation"
-  // or as a heading with following sibling containing the info
+  // extra: important info section
   const importantInfoSection = doc.querySelector("#importantInformation, #important-information, .important-information, .product-facts");
   if (importantInfoSection) {
-    // Try to find a heading or bold text with "Ingredients"
+    // find a heading with "Ingredients" as title
     const headings = importantInfoSection.querySelectorAll("h5, h4, h3, b, strong, .a-text-bold");
     for (const heading of Array.from(headings)) {
       if (/ingredients/i.test(heading.textContent || "")) {
-        // Look for the next sibling or parent element's text
         let info = "";
-        // Try next sibling
         const next = heading.nextElementSibling;
         if (next && next.textContent) {
           info = next.textContent.trim();
         }
-        // If not, try parent
         if (!info && heading.parentElement && heading.parentElement.textContent) {
           info = heading.parentElement.textContent.replace(/Ingredients[:\s]*/i, "").trim();
         }
@@ -81,7 +73,7 @@ function parseIngredients(html: string): string {
         }
       }
     }
-    // Fallback: search for "Ingredients:" in the section text
+    // extra pt 2: search for "Ingredients:" in the description text
     const text = importantInfoSection.textContent || "";
     const match = /Ingredients[:\s]*([^\n.]+)/i.exec(text);
     if (match) {
@@ -89,23 +81,20 @@ function parseIngredients(html: string): string {
     }
   }
 
-  // e) Look for any section with "ingredients" in the heading
+  //search heading if not found (extra backup)
   const allHeadings = doc.querySelectorAll("h1, h2, h3, h4, h5, h6, .a-section .a-text-bold");
   for (const heading of Array.from(allHeadings)) {
     if (/ingredients/i.test(heading.textContent || "")) {
-      // Check the parent section or div
       const section = heading.closest(".a-section, div");
       if (section) {
         const text = section.textContent || "";
-        // Remove the heading text and extract ingredients
         const headingText = heading.textContent || "";
         const ingredientsText = text.replace(headingText, "").trim();
         if (ingredientsText) {
           return ingredientsText;
         }
       }
-      
-      // Try next sibling or parent
+
       const nextEl = heading.nextElementSibling;
       if (nextEl && nextEl.textContent) {
         return nextEl.textContent.trim();
@@ -113,14 +102,14 @@ function parseIngredients(html: string): string {
     }
   }
 
-  // f) Fallback: search anywhere in the document for "Ingredients:"
+  // search everywhere else for "Ingredients:"
   const allText = doc.body.textContent || "";
   const globalMatch = /Ingredients[:\s]*([^\n.]+)/i.exec(allText);
   if (globalMatch) {
     return globalMatch[1].trim();
   }
   
-  // g) Look for nutrition facts section which might contain ingredients
+  // nutrition facts section if it exists
   const nutritionSection = doc.querySelector(".nutritionFacts, #nutrition-facts, .nutrition-facts");
   if (nutritionSection) {
     const text = nutritionSection.textContent || "";
@@ -144,7 +133,7 @@ interface ScrapeResult {
 
 // Scrape the cart container
 async function scrapeCartIngredients(): Promise<ScrapeResult[]> {
-  // Find the cart element - try multiple possible selectors
+  // Find the cart
   const cartEl = document.querySelector("#sc-expanded-cart-localmarket") || 
                 document.querySelector(".sc-list-body") || 
                 document.querySelector(".sc-list-item-content") ||
@@ -155,11 +144,11 @@ async function scrapeCartIngredients(): Promise<ScrapeResult[]> {
     throw new Error("Cart not found. Please make sure you're on the Amazon Fresh cart page.");
   }
   
-  // grab product links and titles - try multiple possible selectors
+  // Grab product links and titles
   const items = Array.from(
     cartEl.querySelectorAll(".sc-list-item, .sc-list-item-content, .sc-product-item")
   ).map(item => {
-    // Try different selectors for product links
+    // Try the different link selectors
     const titleEl = item.querySelector<HTMLAnchorElement>("a.sc-product-link") ||
                    item.querySelector<HTMLAnchorElement>(".a-link-normal") ||
                    item.querySelector<HTMLAnchorElement>("a[href*='/dp/']");
@@ -179,7 +168,7 @@ async function scrapeCartIngredients(): Promise<ScrapeResult[]> {
     throw new Error("No products found in cart. Please make sure your cart contains items.");
   }
   
-  // Define a function to process a single item
+  // Define a function to process each single item
   async function processItem(item: {url: string, title: string}): Promise<ScrapeResult> {
     try {
       console.log(`Fetching: ${item.url}`);
@@ -200,7 +189,6 @@ async function scrapeCartIngredients(): Promise<ScrapeResult[]> {
         };
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (parseErr) {
-        // Try to extract product category to provide better feedback
         const doc = new DOMParser().parseFromString(html, "text/html");
         const categoryEl = doc.querySelector("#wayfinding-breadcrumbs_feature_div, .a-breadcrumb");
         const category = categoryEl?.textContent?.trim() || "Unknown category";
@@ -238,7 +226,7 @@ async function scrapeCartIngredients(): Promise<ScrapeResult[]> {
   // Count successful results
   const successCount = results.filter(item => !item.error).length;
   
-  // Add a summary message if some products failed
+  // Add a summary message if some products failed to be scraped
   if (successCount < items.length) {
     console.log(`Successfully found ingredients for ${successCount} out of ${items.length} products`);
   }
@@ -263,8 +251,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           if (!item.ingredients || item.error) {
             return item;
           }
-          
-          // Check if any allergies are found in the ingredients
+
           const allergyMatches = checkIngredientsForAllergies(item.ingredients, userAllergies);
           
           return {
@@ -284,13 +271,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           error: err instanceof Error ? err.message : "Unknown error" 
         });
       });
-    
-    // Return true to indicate we'll send a response asynchronously
+
     return true;
   }
 });
 
-// Function to check ingredients for allergies
 function checkIngredientsForAllergies(ingredients: string, allergies: string[]): {
   found: boolean;
   matches: string[];
@@ -299,37 +284,27 @@ function checkIngredientsForAllergies(ingredients: string, allergies: string[]):
     return { found: false, matches: [] };
   }
 
-  // Handle case where ingredients might be "No ingredients found" or error message
   if (ingredients.includes("No ingredients found") || 
       ingredients.includes("Failed to load") ||
       ingredients === "N/A") {
     return { found: false, matches: [] };
   }
 
-  // Normalize the ingredients string
-  // Replace common separators with spaces to improve word boundary detection
   const normalizedIngredients = ingredients
     .toLowerCase()
     .replace(/[,;:()[\]/]/g, ' ');
-  
-  // Find matches
+
   const matches = allergies.filter(allergy => {
     if (!allergy || allergy.trim() === '') return false;
-    
-    // Normalize the allergy term
+
     const normalizedAllergy = allergy.toLowerCase().trim();
-    
-    // Create a regex that looks for the allergy as a whole word
-    // This helps avoid false positives (e.g. "milk" matching "milkweed")
+
     const regex = new RegExp(`\\b${normalizedAllergy}\\b`, 'i');
-    
-    // Check for direct match
+
     if (regex.test(normalizedIngredients)) {
       return true;
     }
-    
-    // Check for common variations and derivatives
-    // For example, if looking for "milk", also check for "dairy", "lactose", etc.
+
     const allergyVariations = getAllergyVariations(normalizedAllergy);
     return allergyVariations.some(variation => {
       const variationRegex = new RegExp(`\\b${variation}\\b`, 'i');
@@ -349,7 +324,7 @@ function checkIngredientsForAllergies(ingredients: string, allergies: string[]):
  * @returns Array of related terms to check
  */
 function getAllergyVariations(allergy: string): string[] {
-  // Common allergy variations map
+  // Common allergy variations mapping
   const allergyMap: Record<string, string[]> = {
     'milk': ['dairy', 'lactose', 'whey', 'casein', 'butter', 'cream', 'cheese'],
     'egg': ['eggs', 'albumin', 'ovalbumin', 'lysozyme', 'globulin'],
@@ -374,8 +349,7 @@ function getAllergyVariations(allergy: string): string[] {
     }
   }
   
-  // If no specific variations found, return common word forms
-  // e.g., singular/plural forms
+  // If no specific variations found, return common words
   if (allergy.endsWith('s')) {
     return [allergy.slice(0, -1)]; // Remove 's' for plural
   } else {
@@ -383,5 +357,4 @@ function getAllergyVariations(allergy: string): string[] {
   }
 }
 
-// Log that the content script has loaded
 console.log("Allergy Tracker content script loaded");

@@ -1,6 +1,4 @@
-// scraping.ts
-
-// 1️⃣ Error constants
+// Error constants
 export const HrefConversionErrors = {
   MissingHref: "Missing href attribute on element",
 } as const;
@@ -11,7 +9,7 @@ export const ParseErrors = {
 } as const;
 export type ParseError = typeof ParseErrors[keyof typeof ParseErrors];
 
-// 2️⃣ Convert href → absolute, throwing if absent
+// Convert href → absolute
 export function toAbsolute(href: string | null): string {
   if (!href) {
     throw new Error(HrefConversionErrors.MissingHref);
@@ -19,11 +17,11 @@ export function toAbsolute(href: string | null): string {
   return new URL(href, window.location.origin).href;
 }
 
-// 3️⃣ Parse "Ingredients" out of a product‐page HTML
+// Parse "Ingredients" out of HTML
 export function parseIngredients(html: string): string {
   const doc = new DOMParser().parseFromString(html, "text/html");
 
-  // a) detailBullets list
+  // list
   for (const li of Array.from(
     doc.querySelectorAll<HTMLLIElement>("#detailBullets_feature_div li")
   )) {
@@ -35,7 +33,7 @@ export function parseIngredients(html: string): string {
     }
   }
 
-  // b) productDetails table
+  // table
   for (const row of Array.from(
     doc.querySelectorAll<HTMLTableRowElement>("#productDetails_detailBullets_sections1 tr, #productDetails tr, .prodDetTable tr, .a-keyvalue tr")
   )) {
@@ -48,7 +46,7 @@ export function parseIngredients(html: string): string {
     }
   }
 
-  // c) feature‐bullets fallback
+  // extra check
   const featureText = doc
     .querySelector<HTMLElement>("#feature-bullets, .a-unordered-list")
     ?.textContent || "";
@@ -57,21 +55,17 @@ export function parseIngredients(html: string): string {
     return m[1].trim();
   }
 
-  // d) Important Information section
+  // extra check 2
   const importantInfoSection = doc.querySelector("#importantInformation, #important-information, .important-information, .product-facts");
   if (importantInfoSection) {
-    // Try to find a heading or bold text with "Ingredients"
     const headings = importantInfoSection.querySelectorAll("h5, h4, h3, b, strong, .a-text-bold");
     for (const heading of Array.from(headings)) {
       if (/ingredients/i.test(heading.textContent || "")) {
-        // Look for the next sibling or parent element's text
         let info = "";
-        // Try next sibling
         const next = heading.nextElementSibling;
         if (next && next.textContent) {
           info = next.textContent.trim();
         }
-        // If not, try parent
         if (!info && heading.parentElement && heading.parentElement.textContent) {
           info = heading.parentElement.textContent.replace(/Ingredients[:\s]*/i, "").trim();
         }
@@ -80,7 +74,7 @@ export function parseIngredients(html: string): string {
         }
       }
     }
-    // Fallback: search for "Ingredients:" in the section text
+    // extra pt 2
     const text = importantInfoSection.textContent || "";
     const match = /Ingredients[:\s]*([^\n.]+)/i.exec(text);
     if (match) {
@@ -88,23 +82,20 @@ export function parseIngredients(html: string): string {
     }
   }
 
-  // e) Look for any section with "ingredients" in the heading
+  // search for any sections containing ingredients
   const allHeadings = doc.querySelectorAll("h1, h2, h3, h4, h5, h6, .a-section .a-text-bold");
   for (const heading of Array.from(allHeadings)) {
     if (/ingredients/i.test(heading.textContent || "")) {
-      // Check the parent section or div
       const section = heading.closest(".a-section, div");
       if (section) {
         const text = section.textContent || "";
-        // Remove the heading text and extract ingredients
         const headingText = heading.textContent || "";
         const ingredientsText = text.replace(headingText, "").trim();
         if (ingredientsText) {
           return ingredientsText;
         }
       }
-      
-      // Try next sibling or parent
+
       const nextEl = heading.nextElementSibling;
       if (nextEl && nextEl.textContent) {
         return nextEl.textContent.trim();
@@ -112,14 +103,14 @@ export function parseIngredients(html: string): string {
     }
   }
 
-  // f) Fallback: search anywhere in the document for "Ingredients:"
+  // search entire doc
   const allText = doc.body.textContent || "";
   const globalMatch = /Ingredients[:\s]*([^\n.]+)/i.exec(allText);
   if (globalMatch) {
     return globalMatch[1].trim();
   }
   
-  // g) Look for nutrition facts section which might contain ingredients
+  // facts section search as extra backup
   const nutritionSection = doc.querySelector(".nutritionFacts, #nutrition-facts, .nutrition-facts");
   if (nutritionSection) {
     const text = nutritionSection.textContent || "";
@@ -149,12 +140,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .then(results => sendResponse({ results }))
       .catch(err => sendResponse({ error: err.message }));
 
-    // indicate that we'll call sendResponse asynchronously
     return true;
   }
 });
 
-// 4️⃣ Scrape the cart container
+// Scrape the cart
 export async function scrapeCartIngredients(
   cartEl: Element
 ): Promise<ScrapeResult[]> {
@@ -186,7 +176,6 @@ export async function scrapeCartIngredients(
       const ingredients = parseIngredients(html);
       results.push({ url, ingredients });
     } catch (err) {
-      // push an error so the UI can show it
       console.error("Failed to load or parse", url, err);
     }
   }

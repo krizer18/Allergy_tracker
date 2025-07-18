@@ -1,19 +1,17 @@
 import {
     signInWithEmailAndPassword,
-    //signInWithPopup,
     signInWithCredential as signInWithCredential,
     getRedirectResult,
     GoogleAuthProvider,
     createUserWithEmailAndPassword,
     getAuth,
-    onAuthStateChanged // <-- add this
+    onAuthStateChanged
 } from "firebase/auth";
 import { getFirestore, doc, setDoc, getDoc } from "firebase/firestore";
 import { type FormEvent, useEffect, useState } from "react";
 import { app } from "../../firebase.ts";
 import { highlightAllergies } from "../../utils/allergyChecker";
 
-// Define the ScrapeResult interface
 interface ScrapeResult {
   url: string;
   title: string;
@@ -40,7 +38,7 @@ export default function Registration() {
     const auth = getAuth(app);
     const db = getFirestore(app);
 
-    // On mount, see if we're returning from a redirect
+    // Check if we return from a redirect
     useEffect(() => {
         const redirectUri = chrome.identity.getRedirectURL();
         console.log('⟳ OAuth Redirect URI:', redirectUri);
@@ -59,7 +57,7 @@ export default function Registration() {
             });
     }, [auth]);
 
-    // Listen for auth state changes to load allergies
+    // Listen for authentication state change so we can load user allergies
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, (user) => {
             if (user) {
@@ -67,7 +65,7 @@ export default function Registration() {
                     email: user.email || 'User',
                     uid: user.uid
                 });
-                // Store user info in localStorage for persistence
+                // Store user info in localStorage as backup
                 localStorage.setItem('currentUser', JSON.stringify({
                     email: user.email || 'User',
                     uid: user.uid
@@ -82,7 +80,7 @@ export default function Registration() {
         return () => unsubscribe();
     }, [auth]);
     
-    // Check localStorage for user on component mount
+    // Check localStorage for user access
     useEffect(() => {
         const storedUser = localStorage.getItem('currentUser');
         if (storedUser) {
@@ -141,13 +139,13 @@ export default function Registration() {
         } catch (err) {
             console.error('Error loading allergies:', err);
         } finally {
-            setLoginError(''); // Clear any previous errors
+            setLoginError('');
         }
     };
 
     // Save allergies to Firestore and localStorage
     const saveUserAllergies = async (updatedAllergies: string[]) => {
-        // Always save to localStorage for persistence
+        // localStorage for backup
         localStorage.setItem('userAllergies', JSON.stringify(updatedAllergies));
         
         if (!auth.currentUser && !currentUser) {
@@ -170,7 +168,7 @@ export default function Registration() {
         }
     };
     
-    // Save scrape results to Firestore
+    // Save scraped results to Firestore
     const saveScrapeResults = async (results: ScrapeResult[]) => {
         if (!auth.currentUser) {
             return; // Don't save if not logged in
@@ -190,7 +188,7 @@ export default function Registration() {
         }
     };
     
-    // Load latest scrape results from Firestore
+    // Load latest saved scrape results from Firestore
     const loadLatestScrapeResults = async (userId: string) => {
         try {
             const userRef = doc(db, 'users', userId);
@@ -206,7 +204,7 @@ export default function Registration() {
         }
     };
 
-    // Handle email/password login
+    // Handles email/password login
     const handleLogin = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
         e.preventDefault();
         setLoginError('');
@@ -221,7 +219,7 @@ export default function Registration() {
         }
     };
 
-    // Handle email/password sign-up
+    // Handles email/password sign-up
     const handleSignUp = async (): Promise<void> => {
         setLoginError('');
         try {
@@ -286,7 +284,7 @@ export default function Registration() {
             const accessToken = params.get('access_token');
             if (!accessToken) throw new Error('No access token returned');
 
-            // Use signInWithCredential**s** (plural)
+            // Use signInWithCredentials
             const credential = GoogleAuthProvider.credential(null, accessToken);
             const userCredential = await signInWithCredential(auth, credential);
             console.log('Google sign-in successful');
@@ -335,7 +333,7 @@ export default function Registration() {
                             allergies: allergies
                         },
                         response => {
-                            setIsLoading(false); // End loading state
+                            setIsLoading(false);
                             
                             if (chrome.runtime.lastError) {
                                 console.error('Error sending message:', chrome.runtime.lastError);
@@ -476,15 +474,12 @@ export default function Registration() {
                         <h3>Ingredients found:</h3>
                         <ul>
                             {scrapeResults
-                                // Filter out duplicate entries and entries with "Opens in a new tab" as title
-                                .filter((result, index, self) => 
-                                    // Keep only the first occurrence of each URL
+                                // Filter out duplicate entries
+                                .filter((result, index, self) =>
                                     index === self.findIndex(r => r.url === result.url) &&
-                                    // Filter out entries with just "Opens in a new tab" as title
                                     !(result.title === "Opens in a new tab")
                                 )
                                 .map(({ url, title, ingredients, error, allergyFound, allergyMatches }) => {
-                                    // Clean up the title by removing "Opens in a new tab"
                                     const cleanTitle = title?.replace(/\s*Opens in a new tab\s*/, '') || 'Unknown Product';
                                     
                                     return (

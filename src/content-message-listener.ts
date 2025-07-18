@@ -9,7 +9,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     scrapeCartIngredients(cartEl)
       .then(results => sendResponse({ results }))
       .catch(err => sendResponse({ error: err.message }));
-    // indicates we’ll call sendResponse asynchronously
     return true;
   }
 });
