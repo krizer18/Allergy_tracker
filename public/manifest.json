@@ -6,20 +6,21 @@
     "service_worker": "service-worker.js"
   },
   "icons" : {
-    "64" : "icon.png"
+    "64" : "iconv2.png",
+    "32" : "iconv2.png",
+    "16" : "icon16.png"
   },
   "action": {
     "default_popup": "index.html"
   },
   "permissions": [
     "scripting",
-    "https://www.amazon.com/*",
     "identity",
     "tabs"
-    ],
+  ],
   "host_permissions": [
     "https://*.amazon.com/*"
-    ],
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self';"
   },
