@@ -1,25 +1,9 @@
-import {
-    signInWithEmailAndPassword,
-    signInWithCredential as signInWithCredential,
-    getRedirectResult,
-    GoogleAuthProvider,
-    createUserWithEmailAndPassword,
-    getAuth,
-    onAuthStateChanged
-} from "firebase/auth";
-import { getFirestore, doc, setDoc, getDoc } from "firebase/firestore";
 import { type FormEvent, useEffect, useState } from "react";
-import { app } from "../../firebase.ts";
+import { testBackendConnection } from "../../firebase.ts";
+import { signIn, signUp, signInWithGoogle, signOutUser, getCurrentUser, type User } from "../../services/auth";
 import { highlightAllergies } from "../../utils/allergyChecker";
-
-interface ScrapeResult {
-  url: string;
-  title: string;
-  ingredients: string;
-  error?: string;
-  allergyFound?: boolean;
-  allergyMatches?: string[];
-}
+import { getUserAllergies, saveUserAllergies as apiSaveUserAllergies, saveScrapeResults as apiSaveScrapeResults, getLatestScrapeResults,
+    type ScrapeResult } from "../../services/api";
 
 import './Registration.css';
 import { FaGoogle } from 'react-icons/fa';
@@ -32,53 +16,17 @@ export default function Registration() {
     const [allergies, setAllergies] = useState<string[]>([]);
     const [newAllergy, setNewAllergy] = useState<string>('');
     const [isLoading, setIsLoading] = useState<boolean>(false);
-    const [currentUser, setCurrentUser] = useState<{email: string, uid: string} | null>(null);
+    const [currentUser, setCurrentUser] = useState<User | null>(null);
     
-
-    const auth = getAuth(app);
-    const db = getFirestore(app);
-
-    // Check if we return from a redirect
+    // Initialize user state from auth service
     useEffect(() => {
-        const redirectUri = chrome.identity.getRedirectURL();
-        console.log('⟳ OAuth Redirect URI:', redirectUri);
-
-        getRedirectResult(auth)
-            .then((res) => {
-                if (res && res.user) {
-                    console.log('Redirect sign-in successful', res.user);
-                    // Load allergies after successful login
-                    loadUserAllergies(res.user.uid);
-                }
-            })
-            .catch((err) => {
-                console.error('Redirect error', err);
-                setLoginError(err instanceof Error ? err.message : String(err));
-            });
-    }, [auth]);
-
-    // Listen for authentication state change so we can load user allergies
-    useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, (user) => {
-            if (user) {
-                setCurrentUser({
-                    email: user.email || 'User',
-                    uid: user.uid
-                });
-                // Store user info in localStorage as backup
-                localStorage.setItem('currentUser', JSON.stringify({
-                    email: user.email || 'User',
-                    uid: user.uid
-                }));
-                loadUserAllergies(user.uid);
-                loadLatestScrapeResults(user.uid);
-            } else {
-                setCurrentUser(null);
-                localStorage.removeItem('currentUser');
-            }
-        });
-        return () => unsubscribe();
-    }, [auth]);
+        const user = getCurrentUser();
+        if (user) {
+            setCurrentUser(user);
+            loadUserAllergies(user.uid);
+            loadLatestScrapeResults(user.uid);
+        }
+    }, []);
     
     // Check localStorage for user access
     useEffect(() => {
@@ -113,94 +61,80 @@ export default function Registration() {
         }
     }, []);
 
-    // Load user allergies
+    // Load user allergies from backend API
     const loadUserAllergies = async (userId: string) => {
         if (!userId) return;
 
         try {
-            const userRef = doc(db, 'users', userId);
-            const userDoc = await getDoc(userRef);
-
-            if (userDoc.exists()) {
-                const userData = userDoc.data();
-                if (userData.allergies) {
-                    // Handle both array and object formats
-                    if (Array.isArray(userData.allergies)) {
-                        setAllergies(userData.allergies);
-                    } else if (userData.allergies.items && Array.isArray(userData.allergies.items)) {
-                        setAllergies(userData.allergies.items);
-                    } else {
-                        setAllergies([]);
+            // Get allergies from backend API
+            const userAllergies = await getUserAllergies();
+            setAllergies(userAllergies || []);
+        } catch (err) {
+            console.error('Error loading allergies from API:', err);
+            // Try to load from localStorage as fallback
+            const storedAllergies = localStorage.getItem('userAllergies');
+            if (storedAllergies) {
+                try {
+                    const parsedAllergies = JSON.parse(storedAllergies);
+                    if (Array.isArray(parsedAllergies)) {
+                        setAllergies(parsedAllergies);
                     }
-                } else {
-                    setAllergies([]);
+                } catch (parseErr) {
+                    console.error('Error parsing stored allergies:', parseErr);
                 }
             }
-        } catch (err) {
-            console.error('Error loading allergies:', err);
         } finally {
             setLoginError('');
         }
     };
 
-    // Save allergies to Firestore and localStorage
+    // Save allergies to backend API and localStorage
     const saveUserAllergies = async (updatedAllergies: string[]) => {
         // localStorage for backup
         localStorage.setItem('userAllergies', JSON.stringify(updatedAllergies));
         
-        if (!auth.currentUser && !currentUser) {
+        if (!currentUser) {
             setLoginError('You must be logged in to save allergies to your account');
             return;
         }
 
         try {
-            const userId = auth.currentUser?.uid || currentUser?.uid;
-            if (!userId) return;
-            
-            const userRef = doc(db, 'users', userId);
-            await setDoc(userRef, {
-                allergies: updatedAllergies,
-                lastUpdated: new Date().toISOString()
-            }, { merge: true });
+            // Save allergies using backend API
+            await apiSaveUserAllergies(updatedAllergies);
         } catch (err) {
-            console.error('Error saving allergies:', err);
+            console.error('Error saving allergies to API:', err);
             setLoginError('Failed to save your allergies to your account');
         }
     };
     
-    // Save scraped results to Firestore
+    // Save scraped results to backend API
     const saveScrapeResults = async (results: ScrapeResult[]) => {
-        if (!auth.currentUser) {
+        if (!currentUser) {
             return; // Don't save if not logged in
         }
 
         try {
-            const userRef = doc(db, 'users', auth.currentUser.uid);
-            await setDoc(userRef, {
-                latestScrape: {
-                    results,
-                    timestamp: new Date().toISOString()
-                }
-            }, { merge: true });
-            console.log('Scrape results saved to Firebase');
+            // Save results using backend API
+            await apiSaveScrapeResults(results);
+            console.log('Scrape results saved to backend');
         } catch (err) {
-            console.error('Error saving scrape results:', err);
+            console.error('Error saving scrape results to API:', err);
         }
     };
     
-    // Load latest saved scrape results from Firestore
+    // Load latest saved scrape results from backend API
     const loadLatestScrapeResults = async (userId: string) => {
+        if (!userId || !currentUser) return;
+        
         try {
-            const userRef = doc(db, 'users', userId);
-            const userDoc = await getDoc(userRef);
-
-            if (userDoc.exists() && userDoc.data().latestScrape) {
-                const latestScrape = userDoc.data().latestScrape;
-                setScrapeResults(latestScrape.results);
-                console.log('Loaded previous scrape results from', latestScrape.timestamp);
+            // Get latest scrape results from backend API
+            const results = await getLatestScrapeResults();
+            if (results && results.length > 0) {
+                setScrapeResults(results);
+                console.log('Loaded previous scrape results from backend');
             }
         } catch (err) {
-            console.error('Error loading scrape results:', err);
+            console.error('Error loading scrape results from API:', err);
         }
     };
 
@@ -209,11 +143,10 @@ export default function Registration() {
         e.preventDefault();
         setLoginError('');
         try {
-            const userCredential = await signInWithEmailAndPassword(auth, email, password);
+            const user = await signIn(email, password);
             console.log('Login successful');
-            if (userCredential.user) {
-                loadUserAllergies(userCredential.user.uid);
-            }
+            setCurrentUser(user);
+            loadUserAllergies(user.uid);
         } catch (err) {
             setLoginError(err instanceof Error ? err.message : 'Login failed');
         }
@@ -223,11 +156,19 @@ export default function Registration() {
     const handleSignUp = async (): Promise<void> => {
         setLoginError('');
         try {
-            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            const user = await signUp(email, password);
             console.log('Sign-up successful');
+            setCurrentUser(user);
+            
             // Initialize empty allergies for new user
-            if (userCredential.user) {
-                await saveUserAllergies([]);
+            // Use the user directly instead of relying on currentUser state
+            localStorage.setItem('userAllergies', JSON.stringify([]));
+            
+            try {
+                // Save allergies using backend API with the user we just got
+                await apiSaveUserAllergies([]);
+            } catch (saveErr) {
+                console.error('Error saving initial allergies:', saveErr);
             }
         } catch (err) {
             setLoginError(err instanceof Error ? err.message : 'Sign-up failed');
@@ -258,39 +199,10 @@ export default function Registration() {
     const handleGoogleSignIn = async (): Promise<void> => {
         setLoginError('');
         try {
-            const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
-            const redirectUri = chrome.identity.getRedirectURL();
-            const scope = encodeURIComponent('profile email');
-            const authUrl =
-                `https://accounts.google.com/o/oauth2/v2/auth` +
-                `?client_id=${clientId}` +
-                `&response_type=token` +
-                `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-                `&scope=${scope}`;
-
-            console.log('▶️ Google OAuth:');
-            console.log('   clientId:', clientId);
-            console.log('   redirectUri:', redirectUri);
-            console.log('   authUrl:', authUrl);
-
-            const callbackUrl = await chrome.identity.launchWebAuthFlow({
-                url: authUrl,
-                interactive: true
-            });
-            if (!callbackUrl) throw new Error('Authentication failed');
-
-            const hash = new URL(callbackUrl).hash.substring(1);
-            const params = new URLSearchParams(hash);
-            const accessToken = params.get('access_token');
-            if (!accessToken) throw new Error('No access token returned');
-
-            // Use signInWithCredentials
-            const credential = GoogleAuthProvider.credential(null, accessToken);
-            const userCredential = await signInWithCredential(auth, credential);
+            const user = await signInWithGoogle();
             console.log('Google sign-in successful');
-            if (userCredential.user) {
-                loadUserAllergies(userCredential.user.uid);
-            }
+            setCurrentUser(user);
+            loadUserAllergies(user.uid);
         } catch (err) {
             console.error(err);
             setLoginError(err instanceof Error ? err.message : 'Google sign-in failed');
@@ -370,6 +282,15 @@ export default function Registration() {
                 )}
                 <small className="privacy-link">
                     <a href="privacy-policy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+                    <button 
+                        onClick={async () => {
+                            const isConnected = await testBackendConnection();
+                            setLoginError(isConnected ? 'Backend is connected and working!' : 'Backend connection failed. Make sure the server is running.');
+                        }}
+                        style={{ marginLeft: '10px', fontSize: '10px', padding: '2px 5px' }}
+                    >
+                        Test Backend
+                    </button>
                 </small>
             </div>
             <div className="formContent">
@@ -406,14 +327,14 @@ export default function Registration() {
                 ) : (
                     <div className="logged-in-actions">
                         <p>Your allergies and scan results will be saved automatically.</p>
-                        <button type="button" onClick={() => {
+                        <button type="button" onClick={async () => {
                             // Clear allergies and results when logging out
                             setAllergies([]);
                             setScrapeResults([]);
                             setEmail(''); // Clear email field
                             setPassword(''); // Clear password field
-                            localStorage.removeItem('userAllergies');
-                            auth.signOut();
+                            setCurrentUser(null);
+                            await signOutUser();
                         }} className="logout-button">
                             Log out
                         </button>

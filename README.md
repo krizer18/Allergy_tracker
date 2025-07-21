@@ -25,39 +25,60 @@ A Chrome extension that helps users identify potential allergens in their Amazon
 - Node.js and npm
 - Firebase account (for authentication and storing user allergies)
 
-### Installation
+### Backend Setup
 
-1. Clone this repository
-2. Create a `.env` file with your Firebase configuration:
+1. Navigate to the backend directory:
+   ```bash
+   cd backend
+   ```
+
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+3. Create a Firebase service account:
+   - Go to your Firebase project settings
+   - Navigate to "Service accounts" tab
+   - Click "Generate new private key"
+   - Save the JSON file as `service-account-key.json` in the backend directory
+
+4. Update the `.env` file in the backend directory with your Firebase configuration
+
+5. Start the backend server:
+   ```bash
+   npm start
+   ```
+
+### Frontend Setup
+
+1. Create a `.env` file in the root directory with your API URL:
 
 ```
-VITE_FIREBASE_API_KEY=your-api-key
-VITE_FIREBASE_AUTH_DOMAIN=your-auth-domain
-VITE_FIREBASE_PROJECT_ID=your-project-id
-VITE_FIREBASE_STORAGE_BUCKET=your-storage-bucket
-VITE_FIREBASE_MESSAGING_SENDER_ID=your-messaging-sender-id
-VITE_FIREBASE_APP_ID=your-app-id
-VITE_FIREBASE_MEASUREMENT_ID=your-measurement-id
-VITE_GOOGLE_CLIENT_ID=your-google-client-id
+VITE_API_BASE_URL=http://localhost:3000/api
 ```
 
-3. Install dependencies:
+2. Install dependencies:
 
 ```bash
 npm install
 ```
 
-4. Build the extension:
+3. Build the extension:
 
 ```bash
 npm run build
 ```
 
-5. Load the extension in Chrome:
+4. Load the extension in Chrome:
    - Go to `chrome://extensions/`
    - Enable "Developer mode"
    - Click "Load unpacked"
    - Select the `dist` folder from this project
+   
+5. Test the backend connection:
+   - Open the extension popup
+   - Click the "Test Backend" button next to Privacy Policy
 
 ## Usage
 
